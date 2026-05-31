@@ -1,10 +1,11 @@
 # Pebble Fluid Sim
 
 <p align="center">
-  <img src="pebble_screenshot_2026-05-31_18-15-20.png" width="180" alt="Water palette" />
-  <img src="pebble_screenshot_2026-05-31_23-03-58.png" width="180" alt="Fire palette" />
+  <img src="pebble_screenshot_2026-05-31_18-15-20.png" width="160" alt="Water palette" />
+  <img src="pebble_screenshot_2026-05-31_23-03-58.png" width="160" alt="Fire palette" />
+  <img src="pebble_screenshot_2026-05-31_23-08-23.png" width="160" alt="Acid palette" />
 </p>
-<p align="center"><sub>Colliding jets on the Water and Fire palettes (Pebble Time 2)</sub></p>
+<p align="center"><sub>Colliding jets on the Water, Fire, and Acid palettes (Pebble Time 2)</sub></p>
 
 A real-time fluid simulation watchapp for Pebble smartwatches. Tilt to slosh,
 tap to splash, and hold the buttons to fire colliding dye jets — all running on
