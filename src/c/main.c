@@ -267,6 +267,28 @@ static void apply_noise(void) {
   }
 }
 
+// Splash: where the jets pile up against the left (back) wall, the fluid can't
+// keep going left, so it sprays up and down along the wall. We make this happen
+// by pushing each wall cell toward its emptier vertical neighbour — fluid flows
+// off the top of the pile and off the bottom, fanning out into a splash. This is
+// emergent: it works wherever the stream lands and for one jet or both.
+static void splash_left_wall(void) {
+  // Only the few columns hugging the left wall participate in the splash.
+  for (int x = 1; x <= 3; x++) {
+    for (int y = 1; y < GRID_H - 1; y++) {
+      if (s_density[idx(x, y)] < 32) continue;  // no fluid here to splash
+
+      // Spread from high density to low: if there's more fluid below than above,
+      // push this cell up (toward the emptier side), and vice-versa.
+      int grad = (int)s_density[idx(x, y+1)] - (int)s_density[idx(x, y-1)];
+      // Stronger nearer the wall (x==1), tapering outward.
+      int push = -grad * (4 - x) / 12;
+      int nvy = (int)s_vy[idx(x, y)] + push;
+      s_vy[idx(x, y)] = (vel_t)clamp_i(nvy, VEL_MIN, VEL_MAX);
+    }
+  }
+}
+
 // Viscosity: minimal smoothing — just enough to fill frame-to-frame gaps.
 // a = 1/32: (32*self + sum) / 36
 static void diffuse_vel(vel_t *v) {
@@ -285,6 +307,7 @@ static void diffuse_vel(vel_t *v) {
 static void fluid_step(void) {
   // --- velocity step ---
   apply_noise();
+  splash_left_wall();   // fan fluid up/down where it hits the back wall
   add_source_vel(s_vx, s_vx_prev);
   add_source_vel(s_vy, s_vy_prev);
 
