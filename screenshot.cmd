@@ -18,7 +18,7 @@ if !INITIAL_DELAY! gtr 0 (
 set /a i=1
 :loop
 echo Taking screenshot !i! of !COUNT!...
-docker run --rm -i -w /app -v "%CD%:/app" rebble/pebble-sdk pebble screenshot --phone 192.168.1.108
+docker run --rm -i -w /app -v "%CD%:/app" pebble-sdk-touch pebble screenshot --phone 192.168.1.108
 
 if !i! lss !COUNT! (
     if !BETWEEN_DELAY! gtr 0 (
