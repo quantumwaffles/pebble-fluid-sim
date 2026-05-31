@@ -44,7 +44,7 @@
 #define DIFFUSE_STEPS   1
 
 // Timer
-#define FRAME_MS        50    // ~20 fps
+#define FRAME_MS        33    // ~30 fps
 
 // ---------------------------------------------------------------------------
 // Simulation state
@@ -230,24 +230,26 @@ static void project(vel_t *vx, vel_t *vy) {
 }
 
 // Enforce boundary conditions:
-// - Zero normal velocity at walls (fluid can't flow through)
-// - Density at boundary mirrors interior (no-flux)
+// - Reflect normal velocity at walls so fluid bounces/splashes back
+// - Density mirrors the interior cell (no-flux, fluid piles up at wall)
 static void set_boundary(void) {
-  // Left and right walls: zero x-velocity, mirror y-velocity and density
+  // Left and right walls: reflect x-velocity, copy y-velocity and density
   for (int y = 0; y < GRID_H; y++) {
-    s_vx[idx(0,        y)] = 0;
-    s_vx[idx(GRID_W-1, y)] = 0;
-    s_vy[idx(0,        y)] = s_vy[idx(1,        y)];
-    s_vy[idx(GRID_W-1, y)] = s_vy[idx(GRID_W-2, y)];
+    // left wall: negate x so fluid bounces rightward
+    s_vx[idx(0,        y)] = (vel_t)(-(int)s_vx[idx(1,        y)]);
+    // right wall: negate x so fluid bounces leftward
+    s_vx[idx(GRID_W-1, y)] = (vel_t)(-(int)s_vx[idx(GRID_W-2, y)]);
+    s_vy[idx(0,        y)] =  s_vy[idx(1,        y)];
+    s_vy[idx(GRID_W-1, y)] =  s_vy[idx(GRID_W-2, y)];
     s_density[idx(0,        y)] = s_density[idx(1,        y)];
     s_density[idx(GRID_W-1, y)] = s_density[idx(GRID_W-2, y)];
   }
-  // Top and bottom walls: zero y-velocity, mirror x-velocity and density
+  // Top and bottom walls: reflect y-velocity, copy x-velocity and density
   for (int x = 0; x < GRID_W; x++) {
-    s_vy[idx(x, 0       )] = 0;
-    s_vy[idx(x, GRID_H-1)] = 0;
-    s_vx[idx(x, 0       )] = s_vx[idx(x, 1       )];
-    s_vx[idx(x, GRID_H-1)] = s_vx[idx(x, GRID_H-2)];
+    s_vy[idx(x, 0       )] = (vel_t)(-(int)s_vy[idx(x, 1       )]);
+    s_vy[idx(x, GRID_H-1)] = (vel_t)(-(int)s_vy[idx(x, GRID_H-2)]);
+    s_vx[idx(x, 0       )] =  s_vx[idx(x, 1       )];
+    s_vx[idx(x, GRID_H-1)] =  s_vx[idx(x, GRID_H-2)];
     s_density[idx(x, 0       )] = s_density[idx(x, 1       )];
     s_density[idx(x, GRID_H-1)] = s_density[idx(x, GRID_H-2)];
   }
@@ -257,10 +259,25 @@ static void apply_noise(void) {
   for (int y = 1; y < GRID_H - 1; y++) {
     for (int x = 1; x < GRID_W - 1; x++) {
       if (s_density[idx(x, y)] < 8) continue;
-      int nvx = (int)s_vx[idx(x,y)] + fast_rand(3);
-      int nvy = (int)s_vy[idx(x,y)] + fast_rand(3);
+      int nvx = (int)s_vx[idx(x,y)] + fast_rand(1);
+      int nvy = (int)s_vy[idx(x,y)] + fast_rand(1);
       s_vx[idx(x,y)] = (vel_t)(nvx > VEL_MAX ? VEL_MAX : (nvx < VEL_MIN ? VEL_MIN : nvx));
       s_vy[idx(x,y)] = (vel_t)(nvy > VEL_MAX ? VEL_MAX : (nvy < VEL_MIN ? VEL_MIN : nvy));
+    }
+  }
+}
+
+// Viscosity: minimal smoothing — just enough to fill frame-to-frame gaps.
+// a = 1/32: (32*self + sum) / 36
+static void diffuse_vel(vel_t *v) {
+  static vel_t tmp[N_CELLS_MAX];
+  memcpy(tmp, v, sizeof(tmp));
+  for (int y = 1; y < GRID_H - 1; y++) {
+    for (int x = 1; x < GRID_W - 1; x++) {
+      int sum = (int)tmp[idx(x-1,y)] + (int)tmp[idx(x+1,y)]
+              + (int)tmp[idx(x,y-1)] + (int)tmp[idx(x,y+1)];
+      int nv = (32 * (int)tmp[idx(x,y)] + sum) / 36;
+      v[idx(x,y)] = (vel_t)(nv > VEL_MAX ? VEL_MAX : (nv < VEL_MIN ? VEL_MIN : nv));
     }
   }
 }
@@ -270,6 +287,10 @@ static void fluid_step(void) {
   apply_noise();
   add_source_vel(s_vx, s_vx_prev);
   add_source_vel(s_vy, s_vy_prev);
+
+  // viscosity — spread momentum so the jet stays continuous
+  diffuse_vel(s_vx);
+  diffuse_vel(s_vy);
 
   // swap and advect velocity
   memcpy(s_vx_prev, s_vx, sizeof(s_vx));
@@ -285,6 +306,11 @@ static void fluid_step(void) {
   memcpy(s_density_prev, s_density, sizeof(s_density));
   advect_density(s_density, s_density_prev, s_vx, s_vy);
 
+  // Gentle dissipation so fluid fades over time rather than accumulating forever
+  for (int i = 0; i < N_CELLS; i++) {
+    s_density[i] = (uint8_t)((s_density[i] * 255) >> 8);
+  }
+
   set_boundary();
 
   // clear sources for next frame
@@ -296,25 +322,46 @@ static void fluid_step(void) {
 // ---------------------------------------------------------------------------
 
 #ifdef PBL_COLOR
-// Map density 0-255 to a blue->cyan->white gradient
-static GColor density_to_color(uint8_t d) {
+// 4x4 Bayer matrix, values 0..15 used as dither thresholds
+static const uint8_t BAYER4[4][4] = {
+  {  0,  8,  2, 10 },
+  { 12,  4, 14,  6 },
+  {  3, 11,  1,  9 },
+  { 15,  7, 13,  5 },
+};
+
+// Quantize one 0..255 channel to the Pebble's 4 levels (0,85,170,255)
+// with ordered dithering using the supplied Bayer threshold (0..15).
+static inline uint8_t dither_channel(int v, uint8_t bayer) {
+  if (v < 0) v = 0;
+  if (v > 255) v = 255;
+  int level = v / 85;            // 0..3 (floor)
+  int rem   = v - level * 85;    // 0..84 remainder toward next level
+  // bayer 0..15 -> threshold 0..84; if remainder exceeds it, bump up a level
+  if (rem * 16 > (int)bayer * 85 && level < 3) level++;
+  return (uint8_t)(level * 85);
+}
+
+// Map density 0-255 to a blue->cyan->white gradient with ordered dithering.
+static GColor density_to_color(uint8_t d, int gx, int gy) {
+  int r, g, b;
   if (d < 64) {
-    // black -> dark blue
-    uint8_t t = d * 3 / 64; // 0..2
-    return GColorFromRGB(0, 0, t * 85);
+    int t = d * 3 / 64;            // 0..2
+    r = 0; g = 0; b = t * 85;
   } else if (d < 128) {
-    // dark blue -> blue
-    uint8_t t = (d - 64);
-    return GColorFromRGB(0, 0, 85 + t * 170 / 64);
+    int t = (d - 64);
+    r = 0; g = 0; b = 85 + t * 170 / 64;
   } else if (d < 192) {
-    // blue -> cyan
-    uint8_t t = (d - 128);
-    return GColorFromRGB(0, t * 255 / 64, 255);
+    int t = (d - 128);
+    r = 0; g = t * 255 / 64; b = 255;
   } else {
-    // cyan -> white
-    uint8_t t = (d - 192);
-    return GColorFromRGB(t * 255 / 63, 255, 255);
+    int t = (d - 192);
+    r = t * 255 / 63; g = 255; b = 255;
   }
+  uint8_t bayer = BAYER4[gy & 3][gx & 3];
+  return GColorFromRGB(dither_channel(r, bayer),
+                       dither_channel(g, bayer),
+                       dither_channel(b, bayer));
 }
 #endif
 
@@ -334,7 +381,7 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
       GRect cell = GRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
 
 #ifdef PBL_COLOR
-      graphics_context_set_fill_color(ctx, density_to_color(d));
+      graphics_context_set_fill_color(ctx, density_to_color(d, x, y));
 #else
       // 1-bit: threshold dither
       if (d < 64)       graphics_context_set_fill_color(ctx, GColorBlack);
@@ -370,15 +417,22 @@ static void timer_callback(void *context) {
 // Button handlers
 // ---------------------------------------------------------------------------
 
+// Density ceiling at the nozzle (below 255 to preserve gradient range —
+// bright white appears where jets collide and concentrate)
+#define INJECT_DENSITY 150
+
 // Top jet: angled inward (downward) so it meets the bottom jet near center
 static void add_fluid_top(void) {
   int cy = GRID_H / 5;
-  for (int y = cy - 4; y <= cy + 4; y++) {
+  for (int y = cy - 2; y <= cy + 2; y++) {
     if (y < 1 || y >= GRID_H - 1) continue;
+    int dist = (y > cy) ? (y - cy) : (cy - y);  // 0..2
+    int ceil = INJECT_DENSITY - dist * 20;       // taper edges
     for (int x = GRID_W - 4; x <= GRID_W - 2; x++) {
-      s_density_prev[idx(x, y)] = 255;
-      s_vx_prev[idx(x, y)] = (vel_t)clamp_i(-320 + fast_rand(6), VEL_MIN, VEL_MAX);
-      s_vy_prev[idx(x, y)] = (vel_t)clamp_i(118 + fast_rand(6), VEL_MIN, VEL_MAX);
+      if ((int)s_density[idx(x, y)] < ceil)
+        s_density[idx(x, y)] = (uint8_t)ceil;
+      s_vx[idx(x, y)] = (vel_t)clamp_i(-96 + fast_rand(4), VEL_MIN, VEL_MAX);
+      s_vy[idx(x, y)] = (vel_t)clamp_i(36 + fast_rand(4), VEL_MIN, VEL_MAX);
     }
   }
 }
@@ -386,12 +440,15 @@ static void add_fluid_top(void) {
 // Bottom jet: angled inward (upward) so it meets the top jet near center
 static void add_fluid_bottom(void) {
   int cy = GRID_H - (GRID_H / 5);
-  for (int y = cy - 4; y <= cy + 4; y++) {
+  for (int y = cy - 2; y <= cy + 2; y++) {
     if (y < 1 || y >= GRID_H - 1) continue;
+    int dist = (y > cy) ? (y - cy) : (cy - y);
+    int ceil = INJECT_DENSITY - dist * 20;
     for (int x = GRID_W - 4; x <= GRID_W - 2; x++) {
-      s_density_prev[idx(x, y)] = 255;
-      s_vx_prev[idx(x, y)] = (vel_t)clamp_i(-320 + fast_rand(6), VEL_MIN, VEL_MAX);
-      s_vy_prev[idx(x, y)] = (vel_t)clamp_i(-118 + fast_rand(6), VEL_MIN, VEL_MAX);
+      if ((int)s_density[idx(x, y)] < ceil)
+        s_density[idx(x, y)] = (uint8_t)ceil;
+      s_vx[idx(x, y)] = (vel_t)clamp_i(-96 + fast_rand(4), VEL_MIN, VEL_MAX);
+      s_vy[idx(x, y)] = (vel_t)clamp_i(-36 + fast_rand(4), VEL_MIN, VEL_MAX);
     }
   }
 }
