@@ -455,7 +455,7 @@ static void add_fluid_top(void) {
       if ((int)s_density[idx(x, y)] < ceil)
         s_density[idx(x, y)] = (uint8_t)ceil;
       s_vx[idx(x, y)] = (vel_t)clamp_i(-96 + fast_rand(4), VEL_MIN, VEL_MAX);
-      s_vy[idx(x, y)] = (vel_t)clamp_i(36 + fast_rand(4), VEL_MIN, VEL_MAX);
+      s_vy[idx(x, y)] = (vel_t)clamp_i(57 + fast_rand(4), VEL_MIN, VEL_MAX);
     }
   }
 }
@@ -471,7 +471,7 @@ static void add_fluid_bottom(void) {
       if ((int)s_density[idx(x, y)] < ceil)
         s_density[idx(x, y)] = (uint8_t)ceil;
       s_vx[idx(x, y)] = (vel_t)clamp_i(-96 + fast_rand(4), VEL_MIN, VEL_MAX);
-      s_vy[idx(x, y)] = (vel_t)clamp_i(-36 + fast_rand(4), VEL_MIN, VEL_MAX);
+      s_vy[idx(x, y)] = (vel_t)clamp_i(-57 + fast_rand(4), VEL_MIN, VEL_MAX);
     }
   }
 }
