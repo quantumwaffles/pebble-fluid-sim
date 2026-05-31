@@ -80,6 +80,17 @@ static int  s_touch_drift_y = 0;
 #endif
 
 // ---------------------------------------------------------------------------
+// Configuration — color palette, chosen from the phone via AppMessage and
+// remembered in persistent storage across launches.
+// ---------------------------------------------------------------------------
+#define PALETTE_WATER       0
+#define PALETTE_FIRE        1
+#define PALETTE_ACID        2
+#define PALETTE_RAINBOW     3
+#define PERSIST_KEY_PALETTE 1
+static int s_palette = PALETTE_WATER;
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 static inline int idx(int x, int y) { return y * GRID_W + x; }
@@ -404,22 +415,67 @@ static inline uint8_t dither_channel(int v, uint8_t bayer) {
   return (uint8_t)(level * 85);
 }
 
-// Map density 0-255 to a blue->cyan->white gradient with ordered dithering.
+// Six-sector hue ramp (h 0..255) used by the rainbow palette.
+static void hue_rgb(int h, int *r, int *g, int *b) {
+  int region = h / 43;             // 0..5
+  int f = (h - region * 43) * 6;   // 0..~255 across the sector
+  if (f > 255) f = 255;
+  switch (region) {
+    case 0:  *r = 255;     *g = f;       *b = 0;       break;
+    case 1:  *r = 255 - f; *g = 255;     *b = 0;       break;
+    case 2:  *r = 0;       *g = 255;     *b = f;       break;
+    case 3:  *r = 0;       *g = 255 - f; *b = 255;     break;
+    case 4:  *r = f;       *g = 0;       *b = 255;     break;
+    default: *r = 255;     *g = 0;       *b = 255 - f; break;
+  }
+}
+
+// Map density 0-255 to an r,g,b triple for the active palette. Each ramp runs
+// dark/saturated at low density up to white where the fluid concentrates.
+static void palette_rgb(int pal, uint8_t d, int *r, int *g, int *b) {
+  switch (pal) {
+    case PALETTE_FIRE:
+      // black -> red -> orange -> yellow -> white
+      if (d < 64)       { *r = d * 255 / 64;            *g = 0;                   *b = 0; }
+      else if (d < 128) { *r = 255;                     *g = (d - 64) * 165 / 64; *b = 0; }
+      else if (d < 192) { *r = 255;                     *g = 165 + (d-128)*90/64; *b = 0; }
+      else              { *r = 255;                     *g = 255;                 *b = (d-192)*255/63; }
+      break;
+
+    case PALETTE_ACID:
+      // deep green -> green -> chartreuse -> white
+      if (d < 64)       { *r = 0;                       *g = 60 + d*120/64;       *b = 0; }
+      else if (d < 128) { *r = (d-64)*150/64;           *g = 180 + (d-64)*75/64;  *b = 0; }
+      else if (d < 192) { *r = 150 + (d-128)*105/64;    *g = 255;                 *b = (d-128)*120/64; }
+      else              { *r = 255;                     *g = 255;                 *b = 120 + (d-192)*135/63; }
+      break;
+
+    case PALETTE_RAINBOW:
+      // cycle hue with density; brighten toward white at the very top
+      hue_rgb(d, r, g, b);
+      if (d >= 224) {
+        int t = (d - 224) * 255 / 31;   // blend to white in the last stretch
+        *r += (255 - *r) * t / 255;
+        *g += (255 - *g) * t / 255;
+        *b += (255 - *b) * t / 255;
+      }
+      break;
+
+    case PALETTE_WATER:
+    default:
+      // blue -> cyan -> white
+      if (d < 64)       { int t = d * 3 / 64; *r = 0; *g = 0;            *b = t * 85; }
+      else if (d < 128) { *r = 0;             *g = 0;                    *b = 85 + (d-64)*170/64; }
+      else if (d < 192) { *r = 0;             *g = (d-128)*255/64;       *b = 255; }
+      else              { *r = (d-192)*255/63; *g = 255;                 *b = 255; }
+      break;
+  }
+}
+
+// Map density to a dithered GColor using the currently selected palette.
 static GColor density_to_color(uint8_t d, int gx, int gy) {
   int r, g, b;
-  if (d < 64) {
-    int t = d * 3 / 64;            // 0..2
-    r = 0; g = 0; b = t * 85;
-  } else if (d < 128) {
-    int t = (d - 64);
-    r = 0; g = 0; b = 85 + t * 170 / 64;
-  } else if (d < 192) {
-    int t = (d - 128);
-    r = 0; g = t * 255 / 64; b = 255;
-  } else {
-    int t = (d - 192);
-    r = t * 255 / 63; g = 255; b = 255;
-  }
+  palette_rgb(s_palette, d, &r, &g, &b);
   uint8_t bayer = BAYER4[gy & 3][gx & 3];
   return GColorFromRGB(dither_channel(r, bayer),
                        dither_channel(g, bayer),
@@ -667,7 +723,27 @@ static void window_unload(Window *window) {
 // ---------------------------------------------------------------------------
 // App lifecycle
 // ---------------------------------------------------------------------------
+
+// Config from the phone: a single PALETTE key selecting the color scheme.
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  (void)context;
+  Tuple *t = dict_find(iter, MESSAGE_KEY_PALETTE);
+  if (t) {
+    s_palette = (int)t->value->int32;
+    persist_write_int(PERSIST_KEY_PALETTE, s_palette);
+    if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+  }
+}
+
 static void init(void) {
+  // Restore the saved palette before anything draws.
+  if (persist_exists(PERSIST_KEY_PALETTE)) {
+    s_palette = persist_read_int(PERSIST_KEY_PALETTE);
+  }
+
+  app_message_register_inbox_received(inbox_received);
+  app_message_open(64, 64);
+
   s_window = window_create();
   window_set_background_color(s_window, GColorBlack);
   window_set_window_handlers(s_window, (WindowHandlers) {

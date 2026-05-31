@@ -5,10 +5,14 @@
     "description": "A fluid simulation for Pebble.",
     "name": "pebble-fluid-sim",
     "pebble": {
-        "capabilities": [],
+        "capabilities": [
+            "configurable"
+        ],
         "displayName": "Fluid Sim",
         "enableMultiJS": true,
-        "messageKeys": [],
+        "messageKeys": [
+            "PALETTE"
+        ],
         "projectType": "native",
         "resources": {
             "media": [
