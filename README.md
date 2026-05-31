@@ -1,5 +1,7 @@
 # Pebble Fluid Sim
 
+![Fluid sim running on Pebble Time 2](pebble_screenshot_2026-05-31_18-15-20.png)
+
 A real-time fluid simulation watchapp for Pebble smartwatches. Tilt to slosh,
 tap to splash, and hold the buttons to fire colliding dye jets — all running on
 a fixed-point [Stam-style](https://www.dgp.toronto.edu/people/stam/reality/Research/pdf/GDC03.pdf)
