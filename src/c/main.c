@@ -278,6 +278,28 @@ static void apply_noise(void) {
   }
 }
 
+// Constant turbulent force from the accelerometer: tilt the watch and the whole
+// tank flows that way, with per-cell jitter so the flow churns (turbulence)
+// rather than sliding as one rigid sheet. Screen y points down while the accel
+// y axis points up, hence the sign flip on gy. Bounded by the velocity damping
+// in fluid_step so a steady tilt settles into sloshing instead of accelerating
+// forever. GRAVITY_SCALE: smaller = stronger pull.
+#define GRAVITY_SCALE 400
+static void apply_gravity(void) {
+  AccelData a;
+  if (accel_service_peek(&a) < 0) return;   // sensor busy/not ready this frame
+  int gx =  a.x / GRAVITY_SCALE;            // tilt right  -> flow right
+  int gy = -a.y / GRAVITY_SCALE;            // tilt top down -> flow down
+  for (int y = 1; y < GRID_H - 1; y++) {
+    for (int x = 1; x < GRID_W - 1; x++) {
+      int nvx = (int)s_vx[idx(x,y)] + gx + fast_rand(4);
+      int nvy = (int)s_vy[idx(x,y)] + gy + fast_rand(4);
+      s_vx[idx(x,y)] = (vel_t)clamp_i(nvx, VEL_MIN, VEL_MAX);
+      s_vy[idx(x,y)] = (vel_t)clamp_i(nvy, VEL_MIN, VEL_MAX);
+    }
+  }
+}
+
 // Splash: where the jets pile up against the left (back) wall, the fluid can't
 // keep going left, so it sprays up and down along the wall. We make this happen
 // by pushing each wall cell toward its emptier vertical neighbour — fluid flows
@@ -318,6 +340,7 @@ static void diffuse_vel(vel_t *v) {
 static void fluid_step(void) {
   // --- velocity step ---
   apply_noise();
+  apply_gravity();      // constant turbulent tilt force from the accelerometer
   splash_left_wall();   // fan fluid up/down where it hits the back wall
   add_source_vel(s_vx, s_vx_prev);
   add_source_vel(s_vy, s_vy_prev);
@@ -340,9 +363,14 @@ static void fluid_step(void) {
   memcpy(s_density_prev, s_density, sizeof(s_density));
   advect_density(s_density, s_density_prev, s_vx, s_vy);
 
-  // Gentle dissipation so fluid fades over time rather than accumulating forever
+  // Gentle dissipation so fluid fades over time rather than accumulating forever.
+  // Also bleed a little velocity (~3%/frame) so the constant gravity force settles
+  // at a terminal sloshing speed instead of accelerating without bound. Held jets
+  // and touch re-inject every frame, so their reach is barely affected.
   for (int i = 0; i < N_CELLS; i++) {
     s_density[i] = (uint8_t)((s_density[i] * 255) >> 8);
+    s_vx[i] -= s_vx[i] / 32;
+    s_vy[i] -= s_vy[i] / 32;
   }
 
   set_boundary();
