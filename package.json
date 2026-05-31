@@ -1,0 +1,30 @@
+{
+    "author": "Michael Rex",
+    "dependencies": {},
+    "keywords": [],
+    "description": "A fluid simulation for Pebble.",
+    "name": "pebble-fluid-sim",
+    "pebble": {
+        "capabilities": [],
+        "displayName": "Fluid Sim",
+        "enableMultiJS": true,
+        "messageKeys": [],
+        "projectType": "native",
+        "resources": {
+            "media": []
+        },
+        "sdkVersion": "3",
+        "targetPlatforms": [
+            "aplite",
+            "basalt",
+            "chalk",
+            "diorite",
+            "emery"
+        ],
+        "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "watchapp": {
+            "watchface": false
+        }
+    },
+    "version": "1.0.0"
+}

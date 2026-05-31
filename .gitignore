@@ -1,0 +1,4 @@
+build/
+node_modules/
+.pebble-ip
+pebble_screenshot_*.png
