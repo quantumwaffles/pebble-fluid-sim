@@ -14,4 +14,4 @@ if "%IP%"=="" (
 
 echo %IP%>.pebble-ip
 echo Installing to %IP%...
-docker run --rm -i -w /app -v "%CD%:/app" rebble/pebble-sdk pebble install --phone %IP%
+docker run --rm -i -w /app -v "%CD%:/app" pebble-sdk-touch pebble install --phone %IP%

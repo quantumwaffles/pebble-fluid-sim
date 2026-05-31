@@ -68,6 +68,17 @@ static bool s_btn_up   = false;
 static bool s_btn_down = false;
 static bool s_btn_select = false;
 
+#if defined(PBL_TOUCH)
+// Touch state — grid cell under the finger; active while a finger is down.
+// Only compiled where the SDK has the TouchService (e.g. Pebble Time 2 / Emery).
+// drift is a per-touch flow direction so each splash travels its own way.
+static bool s_touch_active = false;
+static int  s_touch_gx = 0;
+static int  s_touch_gy = 0;
+static int  s_touch_drift_x = 0;
+static int  s_touch_drift_y = 0;
+#endif
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -424,6 +435,9 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
 static void add_fluid_top(void);
 static void add_fluid_bottom(void);
 static void stir(void);
+#if defined(PBL_TOUCH)
+static void add_fluid_at(int gx, int gy);
+#endif
 
 static void timer_callback(void *context) {
   (void)context;
@@ -431,6 +445,10 @@ static void timer_callback(void *context) {
   if (s_btn_up)     add_fluid_top();
   if (s_btn_down)   add_fluid_bottom();
   if (s_btn_select) stir();
+#if defined(PBL_TOUCH)
+  // Inject every frame while a finger is held down
+  if (s_touch_active) add_fluid_at(s_touch_gx, s_touch_gy);
+#endif
   fluid_step();
   layer_mark_dirty(s_canvas_layer);
   s_timer = app_timer_register(FRAME_MS, timer_callback, NULL);
@@ -495,6 +513,54 @@ static void stir(void) {
   }
 }
 
+#if defined(PBL_TOUCH)
+// Touch jet: deposit a round blob of dye at the touched cell and give it a
+// gentle outward bloom so the drop spreads like fluid landing on the surface.
+static void add_fluid_at(int gx, int gy) {
+  for (int dy = -3; dy <= 3; dy++) {
+    for (int dx = -3; dx <= 3; dx++) {
+      int r2 = dx * dx + dy * dy;
+      if (r2 > 9) continue;                 // round brush, radius ~3 cells
+      int x = gx + dx, y = gy + dy;
+      if (x < 1 || x >= GRID_W - 1 || y < 1 || y >= GRID_H - 1) continue;
+      int ceil = INJECT_DENSITY - r2 * 8;   // brightest at center, soft edge
+      if ((int)s_density[idx(x, y)] < ceil)
+        s_density[idx(x, y)] = (uint8_t)ceil;
+      // Swirl (tangential to the touch point) + the per-touch drift. Both are
+      // ~divergence-free, so projection keeps them instead of cancelling them
+      // like it does a pure outward burst — the dye keeps churning and flowing.
+      int nvx = -dy * 10 + s_touch_drift_x + fast_rand(6);
+      int nvy =  dx * 10 + s_touch_drift_y + fast_rand(6);
+      s_vx[idx(x, y)] = (vel_t)clamp_i(nvx, VEL_MIN, VEL_MAX);
+      s_vy[idx(x, y)] = (vel_t)clamp_i(nvy, VEL_MIN, VEL_MAX);
+    }
+  }
+}
+
+// Touch handler: track the finger and inject on touchdown for instant response;
+// the timer loop keeps injecting each frame while the finger stays down or drags.
+static void touch_handler(const TouchEvent *event, void *context) {
+  (void)context;
+  // New press: pick a fresh flow direction so this splash streams its own way.
+  if (event->type == TouchEvent_Touchdown) {
+    s_touch_drift_x = fast_rand(48);
+    s_touch_drift_y = fast_rand(48);
+  }
+  switch (event->type) {
+    case TouchEvent_Touchdown:
+    case TouchEvent_PositionUpdate:
+      s_touch_gx = clamp_i(event->x / CELL_SIZE, 1, GRID_W - 2);
+      s_touch_gy = clamp_i(event->y / CELL_SIZE, 1, GRID_H - 2);
+      s_touch_active = true;
+      add_fluid_at(s_touch_gx, s_touch_gy);
+      break;
+    case TouchEvent_Liftoff:
+      s_touch_active = false;
+      break;
+  }
+}
+#endif
+
 // Raw press/release — inject immediately on press for instant response,
 // then the timer loop continues injecting each frame while held.
 static void up_press(ClickRecognizerRef r, void *ctx) {
@@ -538,6 +604,13 @@ static void window_load(Window *window) {
 
   window_set_click_config_provider(window, click_config_provider);
 
+#if defined(PBL_TOUCH)
+  // Touchscreen (Pebble Time 2): tap or drag to inject fluid at the finger.
+  if (touch_service_is_enabled()) {
+    touch_service_subscribe(touch_handler, NULL);
+  }
+#endif
+
   // Initialize simulation state
   memset(s_density,      0, sizeof(s_density));
   memset(s_density_prev, 0, sizeof(s_density_prev));
@@ -552,6 +625,9 @@ static void window_load(Window *window) {
 
 static void window_unload(Window *window) {
   (void)window;
+#if defined(PBL_TOUCH)
+  touch_service_unsubscribe();
+#endif
   if (s_timer) {
     app_timer_cancel(s_timer);
     s_timer = NULL;
